@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="lt">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>MusicPartyGame • YouTube Embed Test</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:#0d1118; color:#e6ebf3; }
+    main { width:min(760px, calc(100% - 32px)); margin:38px auto 56px; }
+    h1 { font-size:clamp(1.5rem,5vw,2rem); margin:0 0 9px; }
+    .sub { color:#aab6c8; line-height:1.5; margin:0 0 26px; }
+    .panel { background:#161e2a; border:1px solid #2d384b; border-radius:15px; padding:20px; margin-top:17px; }
+    label { display:block; margin-bottom:7px; font-weight:600; font-size:.92rem; }
+    input, select, button { font:inherit; }
+    input, select { width:100%; padding:12px; border-radius:9px; background:#0c121b; color:white; border:1px solid #435066; }
+    .field { margin-bottom:17px; }
+    .buttons { display:flex; gap:10px; flex-wrap:wrap; }
+    button { border:0; background:#548cf4; color:#091628; padding:11px 17px; border-radius:9px; cursor:pointer; font-weight:700; }
+    button.secondary { background:#2e3c51; color:#e6ebf3; }
+    button:disabled { cursor:not-allowed; opacity:.5; }
+    .aspect { position:relative; width:100%; aspect-ratio:16 / 9; background:#090c12; overflow:hidden; border-radius:11px; margin-top:17px; }
+    #player, #player iframe { width:100%!important; height:100%!important; border:0; }
+    .status { display:flex; align-items:flex-start; gap:10px; font-size:.95rem; line-height:1.45; margin:14px 0 0; }
+    .dot { flex:0 0 9px; height:9px; border-radius:50%; background:#eab35d; margin-top:6px; }
+    .dot.ok { background:#5bd69c; } .dot.fail { background:#ff7474; }
+    .status span { overflow-wrap:anywhere; }
+    pre { overflow-x:auto; white-space:pre-wrap; overflow-wrap:anywhere; min-height:150px; max-height:320px; overflow-y:auto; background:#090e15; border:1px solid #29354a; padding:12px; border-radius:9px; font-size:.77rem; line-height:1.5; }
+    .tiny { font-size:.82rem; color:#aab6c8; line-height:1.55; }
+    a { color:#96b9ff; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>🎵 MusicPartyGame – YouTube testas</h1>
+  <p class="sub">Atskiras viešas GitHub Pages grotuvo bandymas. Jis neturi prieigos prie MusicPartyGame serverio, žaidėjų ar duomenų bazės.</p>
+  <section class="panel">
+    <div class="field">
+      <label for="video">YouTube URL arba video ID</label>
+      <input id="video" type="text" value="uj-LBs8kP5g" autocomplete="off" spellcheck="false" placeholder="Įrašyk YouTube nuorodą arba 11 simbolių ID">
+    </div>
+    <div class="field">
+      <label for="host">Įterpimo domenas</label>
+      <select id="host">
+        <option value="https://www.youtube.com">youtube.com (kaip PC grotuve)</option>
+        <option value="https://www.youtube-nocookie.com">youtube-nocookie.com (kaip telefone)</option>
+      </select>
+    </div>
+    <div class="buttons">
+      <button id="load" type="button">Užkrauti vaizdo įrašą</button>
+      <button id="play" class="secondary" type="button" disabled>Paleisti</button>
+      <button id="stop" class="secondary" type="button" disabled>Sustabdyti</button>
+    </div>
+    <div id="status" class="status" role="status" aria-live="polite"><i class="dot" id="dot"></i><span id="statusText">Ruošiamas YouTube API…</span></div>
+    <div class="aspect"><div id="player"></div></div>
+    <p class="tiny">Svarbu: „Grotuvas paruoštas“ dar nereiškia, kad video veikia. Sėkmingas bandymas yra tik tada, kai būsena tampa <strong>PLAYING</strong>. Telefone paspausk „Paleisti“, kad naršyklė neblokuotų automatinio atkūrimo. Jei neveikia, pabandyk kitą domeną.</p>
+    <p class="tiny">Tiesioginis įrašas: <a id="direct" href="https://www.youtube.com/watch?v=uj-LBs8kP5g" target="_blank" rel="noopener noreferrer">atidaryti YouTube</a></p>
+  </section>
+  <section class="panel">
+    <label for="logs">Vietinė bandymo diagnostika</label>
+    <pre id="logs" aria-live="polite"></pre>
+    <div class="buttons"><button id="copy" class="secondary" type="button">Kopijuoti logą</button><button id="clear" class="secondary" type="button">Išvalyti</button></div>
+    <p class="tiny">Logai rodomi tik šiame puslapyje ir automatiškai niekur nesiunčiami. Juose nėra žaidimo duomenų.</p>
+  </section>
+</main>
+<script>
+(() => {
+  'use strict';
+  const el = id => document.getElementById(id);
+  const videoField = el('video');
+  const hostField = el('host');
+  const loadButton = el('load');
+  const playButton = el('play');
+  const stopButton = el('stop');
+  const logElement = el('logs');
+  const statusElement = el('statusText');
+  const statusDot = el('dot');
+  let player = null, apiReady = false, generation = 0, playbackTimer = null;
+  let currentId = null;
+
+  function log(event, details = {}) {
+    const info = { time: new Date().toLocaleString('lt-LT'), event, ...details };
+    logElement.textContent += JSON.stringify(info) + '\n';
+    logElement.scrollTop = logElement.scrollHeight;
+  }
+  function status(message, kind) {
+    statusElement.textContent = message;
+    statusDot.className = 'dot' + (kind ? ' ' + kind : '');
+    log('STATUS', { message });
+  }
+  function videoId(input) {
+    const s = input.trim();
+    if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
+    try {
+      const u = new URL(s);
+      let id = null;
+      if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(u.hostname)) {
+        id = u.searchParams.get('v') || u.pathname.match(/^\/(?:shorts|embed|live)\/([A-Za-z0-9_-]{11})(?:\/|$)/)?.[1];
+      } else if (u.hostname === 'youtu.be' || u.hostname === 'www.youtu.be') {
+        id = u.pathname.match(/^\/([A-Za-z0-9_-]{11})(?:\/|$)/)?.[1];
+      }
+      return id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+    } catch { return null; }
+  }
+  function clearTimer() { if (playbackTimer) { clearTimeout(playbackTimer); playbackTimer = null; } }
+  function resetPlayer() {
+    clearTimer(); generation += 1;
+    try { if (player && typeof player.destroy === 'function') player.destroy(); }
+    catch (error) { log('PLAYER_DESTROY_EXCEPTION', { message: String(error) }); }
+    player = null; playButton.disabled = true; stopButton.disabled = true;
+    el('player').replaceChildren();
+  }
+  function loadVideo() {
+    if (!apiReady) { status('YouTube API dar neparuošta.', 'fail'); return; }
+    const id = videoId(videoField.value);
+    if (!id) { status('Neteisingas YouTube URL ar video ID.', 'fail'); return; }
+    resetPlayer();
+    currentId = id;
+    const serial = generation;
+    el('direct').href = 'https://www.youtube.com/watch?v=' + encodeURIComponent(id);
+    status('Kraunamas grotuvas…');
+    const host = hostField.value;
+    log('PLAYER_CREATE', { videoId: id, host, origin: location.origin });
+    try {
+      player = new YT.Player('player', {
+        width: '100%', height: '100%', videoId: id, host,
+        playerVars: { playsinline: 1, enablejsapi: 1, origin: location.origin, rel: 0 },
+        events: {
+          onReady() {
+            if (generation !== serial) return;
+            playButton.disabled = false; stopButton.disabled = false;
+            status('Grotuvas paruoštas. Spausk „Paleisti“.', 'ok');
+            log('PLAYER_READY', { videoId: id, host });
+          },
+          onStateChange(event) {
+            if (generation !== serial) return;
+            const labels = { [-1]: 'UNSTARTED', 0: 'ENDED', 1: 'PLAYING', 2: 'PAUSED', 3: 'BUFFERING', 5: 'CUED' };
+            const name = labels[event.data] || 'STATE_' + event.data;
+            log('PLAYER_STATE', { videoId: id, state: name, stateCode: event.data });
+            if (event.data === 1) { clearTimer(); status('✅ PLAYING – įrašas iš tikrųjų groja.', 'ok'); }
+            else if (event.data === 0) { clearTimer(); status('Įrašas baigėsi.', 'ok'); }
+            else if (event.data === 3) status('BUFFERING – kraunama…');
+            else if (event.data === 2) { clearTimer(); status('PAUSED – pristabdyta.'); }
+          },
+          onError(event) {
+            if (generation !== serial) return;
+            clearTimer();
+            const code = event.data;
+            log('YOUTUBE_ERROR', { videoId: id, host, code });
+            status('YouTube klaida ' + code + (code === 150 || code === 101 ? ' – įterpimas neleidžiamas arba blokuojamas' : code === 153 ? ' – nepateikta reikalinga kliento identifikacija' : ''), 'fail');
+          },
+          onAutoplayBlocked() {
+            if (generation !== serial) return;
+            clearTimer(); log('AUTOPLAY_BLOCKED', { videoId: id, host });
+            status('Naršyklė užblokavo automatinį paleidimą. Bandyk spausti „Paleisti“ tiesiogiai.', 'fail');
+          }
+        }
+      });
+    } catch (error) {
+      log('PLAYER_CREATE_EXCEPTION', { message: String(error), videoId: id });
+      status('Nepavyko sukurti grotuvo: ' + String(error), 'fail');
+    }
+  }
+  function play() {
+    if (!player || !currentId) return;
+    try {
+      log('PLAY_REQUEST', { videoId: currentId, host: hostField.value });
+      player.playVideo();
+      clearTimer();
+      const serial = generation;
+      playbackTimer = setTimeout(() => {
+        if (generation !== serial) return;
+        log('PLAYBACK_NOT_CONFIRMED_AFTER_20S', { videoId: currentId });
+        status('Per 20 sek. nepatvirtintas PLAYING – tai diagnostinis timeout, ne YouTube klaidos kodas.', 'fail');
+      }, 20000);
+    } catch (error) {
+      clearTimer(); log('PLAY_EXCEPTION', { message: String(error), videoId: currentId });
+      status('Paleidimo išimtis: ' + String(error), 'fail');
+    }
+  }
+  loadButton.addEventListener('click', loadVideo);
+  playButton.addEventListener('click', play);
+  stopButton.addEventListener('click', () => {
+    clearTimer();
+    try { if (player) player.stopVideo(); log('STOP_REQUEST', { videoId: currentId }); status('Sustabdyta.'); }
+    catch (error) { log('STOP_EXCEPTION', { message: String(error) }); status('Sustabdymo klaida: ' + String(error), 'fail'); }
+  });
+  el('copy').addEventListener('click', () => {
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(logElement.textContent).catch(error => status('Nepavyko nukopijuoti: ' + String(error), 'fail'));
+    else status('Ši naršyklė neturi kopijavimo API – logą gali pažymėti rankiniu būdu.', 'fail');
+  });
+  el('clear').addEventListener('click', () => { logElement.textContent = ''; });
+  videoField.addEventListener('change', () => {
+    const id = videoId(videoField.value);
+    if (id) el('direct').href = 'https://www.youtube.com/watch?v=' + encodeURIComponent(id);
+  });
+  window.onYouTubeIframeAPIReady = () => { apiReady = true; status('YouTube IFrame API paruošta.'); log('API_READY', { origin: location.origin }); loadVideo(); };
+  const s = document.createElement('script');
+  s.src = 'https://www.youtube.com/iframe_api';
+  s.onerror = () => { log('IFRAME_API_LOAD_ERROR'); status('Nepavyko užkrauti YouTube IFrame API.', 'fail'); };
+  document.head.appendChild(s);
+  log('TEST_PAGE_LOADED', { origin: location.origin, referrerPolicy: document.querySelector('meta[name="referrer"]').content });
+  setTimeout(() => { if (!apiReady) { log('IFRAME_API_NOT_READY_AFTER_15S'); status('YouTube IFrame API neparuošta per 15 s.', 'fail'); } }, 15000);
+})();
+</script>
+</body>
+</html>
